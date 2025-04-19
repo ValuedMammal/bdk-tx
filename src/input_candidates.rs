@@ -274,6 +274,7 @@ impl<PF: Debug> Display for PolicyFailure<PF> {
         match self {
             PolicyFailure::MissingOutputs(missing_outputs) => Debug::fmt(missing_outputs, f),
             PolicyFailure::PolicyFailure(failure) => {
+                // Review: should not use fmt::Debug on Display
                 write!(f, "policy failure: {:?}", failure)
             }
         }

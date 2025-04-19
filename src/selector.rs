@@ -8,7 +8,7 @@ use miniscript::bitcoin;
 use crate::{cs_feerate, DefiniteDescriptor, InputCandidates, InputGroup, Output, Selection};
 use alloc::vec::Vec;
 
-/// You seeing this?
+/// A coin selector
 #[derive(Debug, Clone)]
 pub struct Selector<'c> {
     candidates: &'c InputCandidates,
@@ -82,7 +82,8 @@ pub struct RbfParams {
     pub incremental_relay_feerate: FeeRate,
 }
 
-/// TODO: Make this more flexible.
+/// Change policy type
+// TODO: Make this more flexible.
 #[derive(Debug, Clone, Copy)]
 pub enum ChangePolicyType {
     /// Avoid creating dust change output.
@@ -95,13 +96,9 @@ pub enum ChangePolicyType {
 }
 
 impl OriginalTxStats {
-    /// Feerate.
-    ///
-    /// TODO: Make sure this is correct with the rounding.
+    /// Return the [`FeeRate`] of the original tx.
     pub fn feerate(&self) -> FeeRate {
-        FeeRate::from_sat_per_vb_unchecked(
-            ((self.fee.to_sat() as f32) / (self.weight.to_vbytes_ceil() as f32)) as _,
-        )
+        self.fee / self.weight
     }
 }
 
@@ -120,11 +117,10 @@ impl RbfParams {
 
     /// To coin select `Replace` params.
     pub fn to_cs_replace(&self) -> Replace {
-        let replace = Replace {
+        Replace {
             fee: self.original_txs.iter().map(|otx| otx.fee.to_sat()).sum(),
             incremental_relay_feerate: cs_feerate(self.incremental_relay_feerate),
-        };
-        replace
+        }
     }
 
     /// Max feerate of all the original txs.
@@ -134,6 +130,7 @@ impl RbfParams {
         self.original_txs
             .iter()
             .map(|otx| otx.feerate())
+            // Review: should this be `max` instead?
             .min()
             .unwrap_or(FeeRate::ZERO)
     }

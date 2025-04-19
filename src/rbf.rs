@@ -91,6 +91,7 @@ impl RbfSet {
                 tx.input
                     .iter()
                     .map(|txin| txin.previous_output)
+                    // Review: needless collect?
                     .collect::<Vec<_>>()
             })
             .collect::<HashSet<OutPoint>>();

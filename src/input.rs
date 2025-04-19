@@ -7,7 +7,7 @@ use miniscript::bitcoin;
 use miniscript::bitcoin::{OutPoint, Transaction, TxOut};
 use miniscript::plan::Plan;
 
-/// Confirmation status of a tx.
+/// Confirmation status of a tx input.
 #[derive(Debug, Clone, Copy)]
 pub struct InputStatus {
     /// Confirmation block height.
@@ -20,10 +20,11 @@ pub struct InputStatus {
 }
 
 impl InputStatus {
-    /// Helper method.
+    /// From consensus `height` and `time`.
     pub fn new(height: u32, time: u64) -> Result<Self, absolute::ConversionError> {
         Ok(Self {
             height: absolute::Height::from_consensus(height)?,
+            // TODO: handle `.try_into::<u32>()`
             time: absolute::Time::from_consensus(time as _)?,
         })
     }
@@ -46,7 +47,7 @@ impl PlanOrPsbtInput {
     /// TODO: Check whether satisfaction_weight calculations are correct.
     /// TODO: Return error type: invalid outpoint, no `witness_utxo` or `non_witness_utxo`, etc.
     ///
-    /// # WHy do we only support finalized psbt inputs?
+    /// # Why do we only support finalized psbt inputs?
     ///
     /// There is no mulit-party tx building protocol that requires choosing from foreign,
     /// non-finalized PSBT inputs.
@@ -139,9 +140,12 @@ pub struct Input {
 }
 
 impl Input {
-    /// Create
+    /// Create [`Input`] from a previous transaction.
     ///
-    /// Returns `None` if `prev_output_index` does not exist in `prev_tx`.
+    /// # Errors
+    ///
+    /// Returns `OutputsIndexError` if the previous txout is not found in `prev_tx`
+    /// at `output_index`.
     pub fn from_prev_tx<T>(
         plan: Plan,
         prev_tx: T,
@@ -163,7 +167,7 @@ impl Input {
         })
     }
 
-    /// Create
+    /// Create [`Input`] from a previous txout and plan.
     pub fn from_prev_txout(
         plan: Plan,
         prev_outpoint: OutPoint,
@@ -181,9 +185,9 @@ impl Input {
         }
     }
 
-    /// Create
+    /// Create [`Input`] from a [`psbt::Input`].
     ///
-    /// TODO: Return error type: out of bounds, etc.
+    // TODO: Return error type: out of bounds, etc.
     pub fn from_psbt_input(
         prev_outpoint: OutPoint,
         sequence: Sequence,
@@ -207,6 +211,8 @@ impl Input {
             prev_tx,
             plan,
             status,
+            // TODO: maybe add `is_coinbase` parameter, or try to infer from the psbt
+            // input whether the input is coinbase.
             is_coinbase: false,
         })
     }
@@ -332,9 +338,10 @@ impl Input {
         self.plan.sequence()
     }
 
-    /// In weight units.
+    /// The weight in witness units needed for satisfying the [`Input`].
     ///
-    /// TODO: Describe what fields are actually included in this calculation.
+    /// The satisfaction weight is the combined size of the fully satisfied input's witness
+    /// and scriptSig expressed in weight units. See <https://en.bitcoin.it/wiki/Weight_units>.
     pub fn satisfaction_weight(&self) -> u64 {
         self.plan
             .satisfaction_weight()
