@@ -462,3 +462,218 @@ impl InputGroup {
         self.inputs().iter().any(|input| input.is_segwit())
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use bitcoin::absolute::{Height, Time};
+    use bitcoin::secp256k1::Secp256k1;
+    use miniscript::plan::Assets;
+    use miniscript::{Descriptor, DescriptorPublicKey};
+
+    #[test]
+    fn test_is_timelocked_absolute() {
+        let pk = "032b0558078bec38694a84933d659303e2575dae7e91685911454115bfd64487e3";
+        let desc_pk: DescriptorPublicKey = pk.parse().unwrap();
+        // policy: and(pk(A),after(n))
+
+        struct TestCase {
+            name: &'static str,
+            // absolute timelock constraint (consensus value)
+            after: u32,
+            tip_height: Height,
+            tip_time: Time,
+            // expected result of `is_timelocked`
+            exp_is_timelocked: bool,
+        }
+
+        // In each test we hold the input status constant and vary the tip height or time
+        // before testing if the input is timelocked.
+
+        // the input's confirmation status height and time
+        let status_height = Height::from_consensus(1).unwrap();
+        let status_time = Time::from_consensus(1598919121).unwrap();
+        let status = Some(InputStatus {
+            height: status_height,
+            time: status_time,
+        });
+
+        // the tip height or time to consider
+        let absolute_height = 100;
+        let absolute_time = 1598940072;
+        let tip_time = Time::from_consensus(absolute_time).unwrap();
+
+        let cases = [
+            TestCase {
+                name: "absolute height constraint, immature",
+                after: absolute_height,
+                tip_height: Height::from_consensus(absolute_height - 1).unwrap(),
+                tip_time,
+                exp_is_timelocked: true,
+            },
+            TestCase {
+                name: "absolute height constraint, mature",
+                after: absolute_height,
+                tip_height: Height::from_consensus(absolute_height).unwrap(),
+                tip_time,
+                exp_is_timelocked: false,
+            },
+            TestCase {
+                name: "absolute time constraint, immature",
+                after: absolute_time,
+                tip_height: Height::from_consensus(100).unwrap(),
+                tip_time: Time::from_consensus(absolute_time - 1).unwrap(),
+                exp_is_timelocked: true,
+            },
+            TestCase {
+                name: "absolute time constraint, mature",
+                after: absolute_time,
+                tip_height: Height::from_consensus(100).unwrap(),
+                tip_time: Time::from_consensus(absolute_time).unwrap(),
+                exp_is_timelocked: false,
+            },
+        ];
+
+        for test in cases {
+            // create descriptor and plan
+            let desc_str = format!("wsh(and_v(v:pk({pk}),after({})))", test.after);
+            let (desc, _) = Descriptor::parse_descriptor(&Secp256k1::new(), &desc_str).unwrap();
+            let assets = Assets::new()
+                .add(desc_pk.clone())
+                .after(absolute::LockTime::from_consensus(test.after));
+            let plan = desc.at_derivation_index(0).unwrap().plan(&assets).unwrap();
+
+            // construct Input
+            let input = Input {
+                prev_outpoint: OutPoint::null(),
+                prev_txout: TxOut::NULL,
+                prev_tx: None,
+                plan: PlanOrPsbtInput::Plan(plan),
+                status,
+                is_coinbase: false,
+            };
+
+            // test result of `is_timelocked`
+            if test.exp_is_timelocked {
+                assert!(
+                    input.is_timelocked(test.tip_height, test.tip_time),
+                    "{}",
+                    test.name
+                );
+            } else {
+                assert!(
+                    !input.is_timelocked(test.tip_height, test.tip_time),
+                    "{}",
+                    test.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_is_timelocked_relative() {
+        let pk = "032b0558078bec38694a84933d659303e2575dae7e91685911454115bfd64487e3";
+        let desc_pk: DescriptorPublicKey = pk.parse().unwrap();
+        // policy: and(pk(A),older(n))
+
+        // In each test we hold the input status constant and vary the tip height or time
+        // before testing if the input is timelocked.
+
+        struct TestCase {
+            name: &'static str,
+            // relative timelock constraint (blocks or seconds)
+            older: u32,
+            tip_height: Height,
+            tip_time: Time,
+            // expected result of `is_timelocked`
+            exp_is_timelocked: bool,
+        }
+
+        // the input's confirmation status height and time
+        let status_height = 21;
+        let status_time = 1598921451;
+        let status = Some(InputStatus {
+            height: Height::from_consensus(status_height).unwrap(),
+            time: Time::from_consensus(status_time).unwrap(),
+        });
+
+        // the tip height or time to consider
+        let relative_height = 144;
+        let intervals = 256; // number of 512-second intervals
+        let timestamp = 1598940072;
+        let tip_time = Time::from_consensus(timestamp).unwrap();
+
+        let cases = [
+            TestCase {
+                name: "relative height constraint, immature",
+                older: relative_height,
+                tip_height: Height::from_consensus(status_height + relative_height - 1).unwrap(),
+                tip_time,
+                exp_is_timelocked: true,
+            },
+            TestCase {
+                name: "relative height constraint, mature",
+                older: relative_height,
+                tip_height: Height::from_consensus(status_height + relative_height).unwrap(),
+                tip_time,
+                exp_is_timelocked: false,
+            },
+            TestCase {
+                name: "relative time constraint, immature",
+                older: (intervals * 512),
+                tip_height: Height::from_consensus(100).unwrap(),
+                tip_time: Time::from_consensus(status_time + ((intervals - 1) * 512)).unwrap(),
+                exp_is_timelocked: true,
+            },
+            TestCase {
+                name: "relative time constraint, mature",
+                older: (intervals * 512),
+                tip_height: Height::from_consensus(100).unwrap(),
+                tip_time: Time::from_consensus(status_time + (intervals * 512)).unwrap(),
+                exp_is_timelocked: false,
+            },
+        ];
+
+        for test in cases {
+            // create descriptor and plan
+            let rel_locktime = if test.older < u16::MAX as u32 {
+                relative::LockTime::from_consensus(test.older).unwrap()
+            } else {
+                relative::LockTime::from_seconds_floor(test.older).unwrap()
+            };
+            let desc_str = format!(
+                "wsh(and_v(v:pk({pk}),older({})))",
+                rel_locktime.to_consensus_u32()
+            );
+            let (desc, _) = Descriptor::parse_descriptor(&Secp256k1::new(), &desc_str).unwrap();
+            let assets = Assets::new().add(desc_pk.clone()).older(rel_locktime);
+            let plan = desc.at_derivation_index(0).unwrap().plan(&assets).unwrap();
+
+            // construct Input
+            let input = Input {
+                prev_outpoint: OutPoint::null(),
+                prev_txout: TxOut::NULL,
+                prev_tx: None,
+                plan: PlanOrPsbtInput::Plan(plan),
+                status,
+                is_coinbase: false,
+            };
+
+            // test result of `is_timelocked`
+            if test.exp_is_timelocked {
+                assert!(
+                    input.is_timelocked(test.tip_height, test.tip_time),
+                    "{}",
+                    test.name
+                );
+            } else {
+                assert!(
+                    !input.is_timelocked(test.tip_height, test.tip_time),
+                    "{}",
+                    test.name
+                );
+            }
+        }
+    }
+}
