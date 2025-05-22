@@ -42,6 +42,9 @@ pub(crate) mod collections {
 
     #[cfg(not(feature = "std"))]
     pub type HashMap<K, V> = alloc::collections::BTreeMap<K, V>;
+    #[cfg(not(feature = "std"))] // My no-std fix
+    pub type HashSet<T> = alloc::collections::BTreeSet<T>;
+    #[cfg(not(feature = "std"))]
     pub use alloc::collections::*;
 }
 

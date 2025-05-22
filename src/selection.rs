@@ -1,5 +1,5 @@
+use alloc::{boxed::Box, vec::Vec};
 use core::fmt::{Debug, Display};
-use std::{boxed::Box, vec::Vec};
 
 use bdk_coin_select::FeeRate;
 use bitcoin::{absolute, transaction, Sequence};
@@ -33,7 +33,8 @@ pub struct PsbtParams {
     ///
     /// The locktime to use if no inputs specifies a required absolute locktime.
     ///
-    /// It is best practive to set this to the latest block height to avoid fee sniping.
+    // It is best practive to set this to the latest block height to avoid fee sniping.
+    // review: The comment is not as relevant now that we have enable_anti_fee_sniping
     pub fallback_locktime: absolute::LockTime,
 
     /// [`Sequence`] value to use by default if not provided by the input.
@@ -56,6 +57,9 @@ impl Default for PsbtParams {
             fallback_locktime: absolute::LockTime::ZERO,
             fallback_sequence: FALLBACK_SEQUENCE,
             mandate_full_tx_for_segwit_v0: true,
+            // review: It should be false by default. e.g. the descriptor might have a certain locktime that if changed
+            // randomly could result in creating an invalid tx.
+            // If true, the behavior should be to error if any conditions aren't right.
             enable_anti_fee_sniping: true,
         }
     }
@@ -163,17 +167,45 @@ impl Selection {
         };
 
         if params.enable_anti_fee_sniping {
-            let rbf_enabled = params.fallback_sequence.is_rbf();
-            let height = params
-                .fallback_locktime
-                .is_block_height()
-                .then(|| params.fallback_locktime.to_consensus_u32())
-                .ok_or(CreatePsbtError::InvalidLockTime(params.fallback_locktime))?;
+            // case: invalid tx version
+            if tx.version.0 != 2 {
+                panic!("Err: invalid version");
+            }
 
-            let current_height = bitcoin::absolute::Height::from_consensus(height)
-                .map_err(|_conversion_error| CreatePsbtError::InvalidHeight(height))?;
+            // review: This I'm unsure of. ie. whether to error if the locktime is actually seconds
+            // case: invalid locktime
+            if !tx.lock_time.is_block_height() {
+                return Err(CreatePsbtError::InvalidLockTime(tx.lock_time));
+            }
 
-            apply_anti_fee_sniping(&mut tx, &self.inputs, current_height, rbf_enabled);
+            // let rbf_enabled = params.fallback_sequence.is_rbf();
+            // let height = params
+            //     .fallback_locktime
+            //     .is_block_height()
+            //     .then(|| params.fallback_locktime.to_consensus_u32())
+            //     .ok_or(CreatePsbtError::InvalidLockTime(params.fallback_locktime))?;
+
+            // let current_height = bitcoin::absolute::Height::from_consensus(height)
+            //     .map_err(|_conversion_error| CreatePsbtError::InvalidHeight(height))?;
+
+            // review:
+            // Note: I think calling this should depend on whether certain conditions
+            // about the tx are already true.
+            // which means if enabled by the params, we should error if any are not true.
+            // Obviously these things should be documented in PsbtParams.
+            // - tx version 2
+            // - the desc. contains neither after/older
+            //   for this, maybe we can't judge whether
+            // TODO: decide what/if new error variants are needed
+
+            // review: I guess we should just use the provided nlocktime as long as it
+            // is Blocks (not Seconds).
+            if tx.version.0 == 2 && tx.lock_time.is_block_height() {
+                let n = tx.lock_time.to_consensus_u32();
+                let current_height =
+                    absolute::Height::from_consensus(n).expect("is_block_height was true");
+                apply_anti_fee_sniping(&mut tx, &self.inputs, current_height);
+            }
         };
 
         let mut psbt = bitcoin::Psbt::from_unsigned_tx(tx).map_err(CreatePsbtError::Psbt)?;

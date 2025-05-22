@@ -1,7 +1,8 @@
+use alloc::boxed::Box;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
-use std::boxed::Box;
 
 use bitcoin::constants::COINBASE_MATURITY;
 use bitcoin::transaction::OutputsIndexError;
@@ -33,6 +34,8 @@ impl TxStatus {
     }
 }
 
+// review: How to know which variant should be Boxed?
+// I thought just the larger of the two..
 #[derive(Debug, Clone)]
 enum PlanOrPsbtInput {
     Plan(Box<Plan>),
@@ -196,6 +199,11 @@ pub struct Input {
 }
 
 impl Input {
+    // /// Is rbf.
+    // fn is_rbf(&self) -> bool {
+    //     self.plan.sequence().map(Sequence::is_rbf)
+    // }
+
     /// Create [`Input`] from a previous transaction.
     ///
     /// # Errors

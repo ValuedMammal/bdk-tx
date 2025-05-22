@@ -1,4 +1,4 @@
-use std::boxed::Box;
+use alloc::boxed::Box;
 
 use bitcoin::{Amount, ScriptBuf, TxOut};
 use miniscript::bitcoin;
