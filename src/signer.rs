@@ -7,6 +7,8 @@ use bitcoin::{
 use miniscript::bitcoin;
 use miniscript::descriptor::{DescriptorSecretKey, KeyMap};
 
+use crate::collections::HashMap;
+
 /// A PSBT signer
 ///
 /// This is a simple wrapper type around miniscript [`KeyMap`] that implements [`GetKey`].
@@ -25,8 +27,9 @@ impl GetKey for Signer {
             match entry {
                 (_, DescriptorSecretKey::Single(prv)) => {
                     let pk = prv.key.public_key(secp);
-                    if key_request == KeyRequest::Pubkey(pk) {
-                        return Ok(Some(prv.key));
+                    let map = HashMap::from([(pk, prv.key)]);
+                    if let Ok(Some(prv)) = GetKey::get_key(&map, key_request.clone(), secp) {
+                        return Ok(Some(prv));
                     }
                 }
                 (_, desc_sk) => {
@@ -64,7 +67,7 @@ mod test {
     use std::string::String;
 
     use bitcoin::bip32::{DerivationPath, Xpriv};
-    use miniscript::Descriptor;
+    use miniscript::{Descriptor, ToPublicKey};
 
     use super::*;
 
@@ -84,6 +87,38 @@ mod test {
         assert!(matches!(
             res,
             Ok(Some(k)) if k == prv
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn get_key_xonly_pk() -> anyhow::Result<()> {
+        let secp = Secp256k1::new();
+        let wif = "cU6BxEezV8FnkEPBCaFtc4WNuUKmgFaAu6sJErB154GXgMUjhgWe";
+        let prv = bitcoin::PrivateKey::from_wif(wif)?;
+        let pk = prv.public_key(&secp); // 039788f4875414abe6ec3d7c49fa92ea42b9296dd054432d72abffbced69c77118
+
+        let xonly_pk = pk.to_x_only_pubkey();
+
+        let s = format!("wpkh({wif})");
+        let (_, keymap) = Descriptor::parse_descriptor(&secp, &s).unwrap();
+
+        let signer = Signer(keymap);
+        let req = KeyRequest::XOnlyPubkey(xonly_pk);
+        let res = signer.get_key(req, &secp);
+
+        // Depending on the parity of `pk` we may need to negate the resulting key
+        let (_, _parity) = pk.inner.x_only_public_key();
+        let exp_prv = if matches!(secp256k1::Parity::Odd, _parity) {
+            prv.negate()
+        } else {
+            prv
+        };
+
+        assert!(matches!(
+            res,
+            Ok(Some(k)) if k == exp_prv
         ));
 
         Ok(())
